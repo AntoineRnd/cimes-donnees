@@ -88,9 +88,10 @@ def classer(t, area, wd):
     if h in ("city_gate", "citywalls"): return "patrimoine", "porte"
     if h == "archaeological_site": return "patrimoine", "site"
     if h == "monument": return "patrimoine", "monument"
-    if h == "memorial" and wd: return "patrimoine", "monument"
+    if h == "memorial" and wd and t.get("memorial") not in ("statue", "bust", "plaque", "stolperstein", "stele", "blue_plaque"): return "patrimoine", "monument"
     # nature
-    if le in ("park", "garden") and (wd or area >= (5000 if le == "park" else 10000)): return "nature", "parc"
+    # parcs : pas les petits squares de quartier (1 ha au moins, ou 0,3 ha avec une fiche Wikidata)
+    if le in ("park", "garden") and (area >= 10000 or (wd and area >= 3000)): return "nature", "parc"
     if le == "nature_reserve" and (wd or area >= 50000): return "nature", "reserve"
     if n == "water" and t.get("water") not in ("river", "canal", "stream", "wastewater", "basin", "reflecting_pool") and (wd or area >= 20000): return "nature", "lac"
     if w == "waterfall" or n == "waterfall": return "nature", "cascade"
@@ -100,11 +101,14 @@ def classer(t, area, wd):
     # curiosités
     if t.get("amenity") == "fountain" and (wd or h): return "curiosite", "fontaine"
     # petites curiosités locales sans fiche Wikidata : gardées si OSM les décrit comme lieu à voir (pas un commerce ni un bâtiment quelconque)
+    # pas les enclos de zoo ni les manèges
+    if tr == "attraction" and (t.get("attraction") in ("animal", "amusement_ride", "carousel", "roller_coaster", "train", "water_slide", "bumper_car", "swing_carousel", "kiddie_ride", "dark_ride", "log_flume", "drop_tower", "pirate_ship") or t.get("zoo")): return None
     if tr == "attraction" and (wd or t.get("heritage") or t.get("wikipedia") or t.get("description") or n or h or t.get("information") == "board"):
         return "curiosite", "curiosite"
     if tr == "attraction" and not t.get("shop") and not t.get("amenity") and not t.get("building"): return "curiosite", "curiosite"
     return None
 
+GENERIQUE = re.compile(r"^(monuments? aux morts.*|ruines?|vestiges?|parcours de sant[ée]|aire de jeux.*|square|jardin|parc|fontaine|lavoir|calvaire|croix|tour|ch[âa]teau)$", re.I)
 rej = collections.Counter(); items = []
 with open(src, encoding="utf-8") as f:
     for line in f:
@@ -122,6 +126,10 @@ with open(src, encoding="utf-8") as f:
         wd = t.get("wikidata") if re.fullmatch(r"Q\d+", t.get("wikidata") or "") else None
         c = classer(t, area, wd)
         if not c: rej["pas assez notable"] += 1; continue
+        # noms génériques sans fiche : un « Monument aux morts » ou une « Ruine » par village n'est pas une découverte
+        if not wd and GENERIQUE.match(nom) and c[0] != "cime": rej["nom générique"] += 1; continue
+        # un plan d'eau trop petit (bassin, fontaine) n'est pas un lac, même avec une fiche
+        if c[1] == "lac" and area < 5000: rej["bassin trop petit"] += 1; continue
         e = {"id": str(oid), "n": nom, "f": c[0], "c": c[1], "lat": round(la, 6), "lon": round(lo, 6)}
         ele = num(t.get("ele"))
         if ele is not None and c[0] == "cime": e["ele"] = round(ele)
