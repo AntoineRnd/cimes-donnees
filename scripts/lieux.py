@@ -18,6 +18,7 @@ import json, sys, os, math, re, time, datetime, collections, shutil, urllib.requ
 import h3
 
 src, outdir, region = sys.argv[1], sys.argv[2], sys.argv[3]
+UA = {"User-Agent": "CimesDonnees/1.0 (https://github.com/AntoineRnd/cimes-donnees)"}
 TUILE = 5
 NON = {"private", "no"}
 
@@ -128,6 +129,7 @@ with open(src, encoding="utf-8") as f:
         if not c: rej["pas assez notable"] += 1; continue
         # noms génériques sans fiche : un « Monument aux morts » ou une « Ruine » par village n'est pas une découverte
         if not wd and GENERIQUE.match(nom) and c[0] != "cime": rej["nom générique"] += 1; continue
+        if not wd and (nom[0].islower() or re.match(r"(aire|plaine|terrain|espace) de jeux|city[ -]?stade", nom, re.I)): rej["nom vague ou aire de jeux"] += 1; continue
         # un plan d'eau trop petit (bassin, fontaine) n'est pas un lac, même avec une fiche
         if c[1] == "lac" and area < 5000: rej["bassin trop petit"] += 1; continue
         e = {"id": str(oid), "n": nom, "f": c[0], "c": c[1], "lat": round(la, 6), "lon": round(lo, 6)}
@@ -159,9 +161,50 @@ for e in items:
 print(f"Lieux retenus : {len(keep)} (doublons fusionnés : {dup})")
 print("Écartés :", dict(rej))
 
+# --- points hauts : un fort, une tour, une chapelle… perché sur une butte devient une « cime » (ex. la Bastille à Grenoble) ---
+#     Altitudes : Terrain Tiles (Mapzen / AWS, domaine public), zoom 12 (≈ 27 m par pixel en France).
+#     Règle : le lieu est presque au sommet de sa butte (à 50 m près dans un rayon de 300 m)
+#             ET domine les alentours d'au moins 80 m dans un rayon de 1,5 km.
+import io
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+DEMZ, DEMC = 12, {}
+def dem(lat, lon):
+    n = 2 ** DEMZ; x = (lon + 180) / 360 * n; y = (1 - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat))) / math.pi) / 2 * n
+    tx, ty = int(x), int(y); k = (tx, ty)
+    if k not in DEMC:
+        try:
+            u = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{DEMZ}/{tx}/{ty}.png"
+            with urllib.request.urlopen(urllib.request.Request(u, headers=UA), timeout=30) as r: DEMC[k] = Image.open(io.BytesIO(r.read())).convert("RGB")
+        except Exception: DEMC[k] = None
+    im = DEMC[k]
+    if im is None: return None
+    R, G, B = im.getpixel((min(255, int((x - tx) * 256)), min(255, int((y - ty) * 256))))
+    return R * 256 + G + B / 256 - 32768
+def autour(lat, lon, r, n):
+    out = []
+    for i in range(n):
+        a = 2 * math.pi * i / n; out.append(dem(lat + r * math.cos(a) / 110540, lon + r * math.sin(a) / (111320 * math.cos(math.radians(lat)))))
+    return [v for v in out if v is not None]
+HAUT = {"fort", "chateau", "ruines", "tour", "monument", "site", "curiosite", "porte"}
+nh = 0
+if Image is None: print("::warning::Pillow absent : détection des points hauts désactivée")
+else:
+    for e in keep:
+        if e["f"] == "cime" or e["c"] not in HAUT: continue
+        z0 = dem(e["lat"], e["lon"])
+        if z0 is None: continue
+        near = autour(e["lat"], e["lon"], 150, 8) + autour(e["lat"], e["lon"], 300, 12)
+        far = autour(e["lat"], e["lon"], 700, 12) + autour(e["lat"], e["lon"], 1500, 16)
+        if not near or not far: continue
+        if max(near) - z0 <= 50 and z0 - min(far) >= 80:
+            e["haut"] = round(z0 - min(far)); e["ele"] = round(z0); e["orig"] = e["f"]; e["f"] = "cime"; nh += 1
+    print(f"Points hauts devenus des cimes : {nh} · tuiles d'altitude lues : {len(DEMC)}")
+
 # --- Wikidata : photo (P18) et courte description en français, par lots de 50 ---
 ids = sorted({e["wd"] for e in keep if e.get("wd")}); WD = {}
-UA = {"User-Agent": "CimesDonnees/1.0 (https://github.com/AntoineRnd/cimes-donnees)"}
 for i in range(0, len(ids), 50):
     q = "|".join(ids[i:i + 50])
     url = "https://www.wikidata.org/w/api.php?" + urllib.parse.urlencode({"action": "wbgetentities", "ids": q, "props": "claims|descriptions", "languages": "fr", "format": "json"})
