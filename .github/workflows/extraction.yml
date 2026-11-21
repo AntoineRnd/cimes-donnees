@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Outils (osmium)
         run: |
@@ -27,9 +27,15 @@ jobs:
       - name: Téléchargement de l'extrait OpenStreetMap (jamais enregistré dans le dépôt)
         run: |
           set -euo pipefail
-          URL="https://download.geofabrik.de/${{ github.event.inputs.region }}-latest.osm.pbf"
-          echo "Source : $URL"
-          curl -fL --retry 3 --retry-delay 10 -o /tmp/region.osm.pbf "$URL"
+          R="${{ github.event.inputs.region }}"
+          B="https://download.geofabrik.de"
+          # nouvelle adresse Geofabrik (dossier par région), sinon l'ancienne
+          for URL in "$B/$R/$(basename "$R")-latest.osm.pbf" "$B/$R-latest.osm.pbf"; do
+            echo "Essai : $URL"
+            if curl -fL --retry 3 --retry-delay 10 -o /tmp/region.osm.pbf "$URL"; then echo "Source : $URL"; break; fi
+            rm -f /tmp/region.osm.pbf
+          done
+          test -s /tmp/region.osm.pbf || { echo "Téléchargement impossible"; exit 1; }
           ls -lh /tmp/region.osm.pbf
           osmium fileinfo /tmp/region.osm.pbf | grep -E "timestamp|Bounding" || true
 
