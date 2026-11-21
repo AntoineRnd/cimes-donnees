@@ -14,7 +14,7 @@ permissions:
 jobs:
   extraire:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
@@ -22,6 +22,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq osmium-tool
+          pip install --quiet "h3>=4,<5"
           osmium --version
 
       - name: Téléchargement de l'extrait OpenStreetMap (jamais enregistré dans le dépôt)
@@ -54,6 +55,19 @@ jobs:
           SLUG=$(basename "${{ github.event.inputs.region }}")
           python3 scripts/extract.py /tmp/cimes.geojsonseq "data/$SLUG/cimes.json" "$SLUG"
           ls -lh "data/$SLUG/"
+
+      - name: Zones accessibles à pied (cellules H3, par tuiles)
+        run: |
+          set -euo pipefail
+          SLUG=$(basename "${{ github.event.inputs.region }}")
+          osmium tags-filter /tmp/region.osm.pbf \
+            w/highway=footway,path,track,pedestrian,living_street,residential,service,unclassified,tertiary,tertiary_link,secondary,secondary_link,primary,primary_link,steps,cycleway,bridleway,road \
+            -o /tmp/voies.osm.pbf --overwrite
+          osmium export /tmp/voies.osm.pbf -f geojsonseq --geometry-types=linestring,polygon -o /tmp/voies.geojsonseq --overwrite
+          ls -lh /tmp/voies.geojsonseq
+          python3 scripts/acces.py /tmp/voies.geojsonseq "data/$SLUG/acces" "$SLUG"
+          rm -f /tmp/voies.geojsonseq /tmp/voies.osm.pbf
+          du -sh "data/$SLUG/acces"
 
       - name: Enregistrement du résultat dans le dépôt
         run: |
