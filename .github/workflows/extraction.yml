@@ -1,0 +1,59 @@
+name: Extraction des cimes (OpenStreetMap)
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Extrait Geofabrik (ex. europe/france/rhone-alpes)"
+        default: "europe/france/rhone-alpes"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  extraire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Outils (osmium)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osmium-tool
+          osmium --version
+
+      - name: Téléchargement de l'extrait OpenStreetMap (jamais enregistré dans le dépôt)
+        run: |
+          set -euo pipefail
+          URL="https://download.geofabrik.de/${{ github.event.inputs.region }}-latest.osm.pbf"
+          echo "Source : $URL"
+          curl -fL --retry 3 --retry-delay 10 -o /tmp/region.osm.pbf "$URL"
+          ls -lh /tmp/region.osm.pbf
+          osmium fileinfo /tmp/region.osm.pbf | grep -E "timestamp|Bounding" || true
+
+      - name: Filtrage (sommets, cols, collines, belvédères)
+        run: |
+          set -euo pipefail
+          osmium tags-filter /tmp/region.osm.pbf \
+            n/natural=peak,saddle,hill n/mountain_pass=yes n/tourism=viewpoint \
+            -o /tmp/cimes.osm.pbf --overwrite
+          osmium export /tmp/cimes.osm.pbf -f geojsonseq --add-unique-id=type_id -o /tmp/cimes.geojsonseq --overwrite
+          wc -l /tmp/cimes.geojsonseq
+
+      - name: Fichier léger pour Cimes + contrôles
+        run: |
+          set -euo pipefail
+          SLUG=$(basename "${{ github.event.inputs.region }}")
+          python3 scripts/extract.py /tmp/cimes.geojsonseq "data/$SLUG/cimes.json" "$SLUG"
+          ls -lh "data/$SLUG/"
+
+      - name: Enregistrement du résultat dans le dépôt
+        run: |
+          set -euo pipefail
+          git config user.name "cimes-bot"
+          git config user.email "cimes-bot@users.noreply.github.com"
+          git add data/
+          git commit -m "Extraction des cimes : ${{ github.event.inputs.region }}" || echo "Rien de nouveau"
+          git push
