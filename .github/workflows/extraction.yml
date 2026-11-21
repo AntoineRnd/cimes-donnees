@@ -56,6 +56,23 @@ jobs:
           python3 scripts/extract.py /tmp/cimes.geojsonseq "data/$SLUG/cimes.json" "$SLUG"
           ls -lh "data/$SLUG/"
 
+      - name: Lieux à découvrir (cimes, nature, patrimoine, curiosités) + photos Wikidata
+        run: |
+          set -euo pipefail
+          SLUG=$(basename "${{ github.event.inputs.region }}")
+          osmium tags-filter /tmp/region.osm.pbf \
+            n/natural=peak,saddle,hill n/mountain_pass=yes n/tourism=viewpoint \
+            nwr/historic=castle,fort,ruins,tower,city_gate,citywalls,archaeological_site,monument,manor,memorial \
+            nwr/man_made=tower nwr/leisure=park,garden,nature_reserve \
+            nwr/natural=water,cave_entrance,arch,rock,stone,gorge,waterfall,tree nwr/waterway=waterfall \
+            nwr/tourism=attraction nwr/amenity=fountain \
+            -o /tmp/lieux.osm.pbf --overwrite
+          osmium export /tmp/lieux.osm.pbf -f geojsonseq --add-unique-id=type_id -o /tmp/lieux.geojsonseq --overwrite
+          ls -lh /tmp/lieux.geojsonseq
+          python3 scripts/lieux.py /tmp/lieux.geojsonseq "data/$SLUG/lieux" "$SLUG"
+          rm -f /tmp/lieux.geojsonseq /tmp/lieux.osm.pbf
+          du -sh "data/$SLUG/lieux"
+
       - name: Zones accessibles à pied (cellules H3, par tuiles)
         run: |
           set -euo pipefail
