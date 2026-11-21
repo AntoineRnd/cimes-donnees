@@ -188,7 +188,7 @@ def autour(lat, lon, r, n):
     for i in range(n):
         a = 2 * math.pi * i / n; out.append(dem(lat + r * math.cos(a) / 110540, lon + r * math.sin(a) / (111320 * math.cos(math.radians(lat)))))
     return [v for v in out if v is not None]
-HAUT = {"fort", "chateau", "ruines", "tour", "monument", "site", "curiosite", "porte"}
+HAUT = {"fort", "chateau", "ruines", "tour", "site", "porte"}  # pas les monuments aux morts ni les attractions
 nh = 0
 if Image is None: print("::warning::Pillow absent : détection des points hauts désactivée")
 else:
@@ -201,7 +201,16 @@ else:
         if not near or not far: continue
         if max(near) - z0 <= 50 and z0 - min(far) >= 80:
             e["haut"] = round(z0 - min(far)); e["ele"] = round(z0); e["orig"] = e["f"]; e["f"] = "cime"; nh += 1
-    print(f"Points hauts devenus des cimes : {nh} · tuiles d'altitude lues : {len(DEMC)}")
+    # une seule cime par butte : sur une même colline (ex. Fourvière), on garde le point haut le plus marquant,
+    # les autres restent dans leur famille d'origine ; et pas de doublon avec un vrai sommet tout proche
+    H = sorted([e for e in keep if e.get("haut")], key=lambda e: (-(1 if e.get("wd") else 0), -e["haut"], -e["ele"]))
+    pics = [e for e in keep if e["f"] == "cime" and not e.get("haut") and e["c"] in ("sommet", "colline")]
+    gardes = []
+    for e in H:
+        if any(d(e, o) < 800 for o in gardes) or any(d(e, o) < 300 for o in pics):
+            e["f"] = e.pop("orig"); e.pop("haut"); nh -= 1; continue
+        gardes.append(e)
+    print(f"Points hauts devenus des cimes : {nh} (une par butte) · tuiles d'altitude lues : {len(DEMC)}")
 
 # --- Wikidata : photo (P18) et courte description en français, par lots de 50 ---
 ids = sorted({e["wd"] for e in keep if e.get("wd")}); WD = {}
