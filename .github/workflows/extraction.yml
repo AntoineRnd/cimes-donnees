@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq osmium-tool
-          pip install --quiet "h3>=4,<5"
+          pip install --quiet "h3>=4,<5" pillow
           osmium --version
 
       - name: Téléchargement de l'extrait OpenStreetMap (jamais enregistré dans le dépôt)
