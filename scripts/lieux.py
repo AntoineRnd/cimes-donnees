@@ -99,7 +99,10 @@ def classer(t, area, wd):
     if n == "tree" and (wd or t.get("denotation") == "natural_monument"): return "curiosite", "arbre"
     # curiosités
     if t.get("amenity") == "fountain" and (wd or h): return "curiosite", "fontaine"
-    if tr == "attraction" and (wd or t.get("heritage") or t.get("wikipedia")): return "curiosite", "curiosite"
+    # petites curiosités locales sans fiche Wikidata : gardées si OSM les décrit comme lieu à voir (pas un commerce ni un bâtiment quelconque)
+    if tr == "attraction" and (wd or t.get("heritage") or t.get("wikipedia") or t.get("description") or n or h or t.get("information") == "board"):
+        return "curiosite", "curiosite"
+    if tr == "attraction" and not t.get("shop") and not t.get("amenity") and not t.get("building"): return "curiosite", "curiosite"
     return None
 
 rej = collections.Counter(); items = []
