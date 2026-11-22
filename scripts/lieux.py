@@ -99,6 +99,21 @@ def classer(t, area, wd):
     if n == "cave_entrance": return "nature", "grotte"
     if n in ("arch", "rock", "stone", "gorge") and notable: return "nature", "site"
     if n == "tree" and (wd or t.get("denotation") == "natural_monument"): return "curiosite", "arbre"
+    # patrimoine des villages (v2) : de vraies découvertes, présentes partout en France, mais filtrées.
+    # Elles comptent comme les autres lieux (barème inchangé) ; « mineur » sert seulement à les afficher plus discrètement.
+    nm = (t.get("name:fr") or t.get("name") or "").lower()
+    if t.get("amenity") == "place_of_worship" or h in ("church", "chapel"):
+        if "chapelle" in nm or t.get("building") == "chapel" or h == "chapel": return "patrimoine", "chapelle"
+        if notable: return "patrimoine", "eglise"          # églises : seulement classées ou avec fiche Wikidata
+        return None
+    if t.get("amenity") == "lavoir" or t.get("building") == "lavoir": return "patrimoine", "lavoir"
+    if mm in ("windmill", "watermill") or h in ("windmill", "watermill"): return "patrimoine", "moulin"
+    if h == "wayside_shrine": return "patrimoine", "oratoire"
+    if h == "wayside_cross":                                 # croix : seulement les calvaires remarquables
+        if notable or "calvaire" in nm or t.get("heritage"): return "patrimoine", "calvaire"
+        return None
+    if h == "bridge" or (t.get("bridge") and (t.get("heritage") or (wd and h))): return "patrimoine", "pont"
+    if n == "spring": return "nature", "source"
     # curiosités
     if t.get("amenity") == "fountain" and (wd or h): return "curiosite", "fontaine"
     # petites curiosités locales sans fiche Wikidata : gardées si OSM les décrit comme lieu à voir (pas un commerce ni un bâtiment quelconque)
@@ -109,8 +124,12 @@ def classer(t, area, wd):
     if tr == "attraction" and not t.get("shop") and not t.get("amenity") and not t.get("building"): return "curiosite", "curiosite"
     return None
 
-GENERIQUE = re.compile(r"^(monuments? aux morts.*|ruines?|vestiges?|parcours de sant[ée]|aire de jeux.*|square|jardin|parc|fontaine|lavoir|calvaire|croix|tour|ch[âa]teau)$", re.I)
+GENERIQUE = re.compile(r"^(monuments? aux morts.*|ruines?|vestiges?|parcours de sant[ée]|aire de jeux.*|square|jardin|parc|fontaine|lavoir|calvaire|croix|tour|ch[âa]teau|chapelle|[ée]glise|moulin|source|pont|oratoire|croix de mission|vieux pont)$", re.I)
 rej = collections.Counter(); items = []
+EX = collections.defaultdict(list)   # exemples écartés, pour vérifier ce que les filtres retirent
+def ecarte(raison, nom, la, lo, t):
+    rej[raison] += 1
+    if nom and len(EX[raison]) < 400: EX[raison].append({"n": nom, "lat": round(la, 5), "lon": round(lo, 5), "tags": {k: v for k, v in t.items() if k in ("amenity", "historic", "man_made", "natural", "leisure", "tourism", "heritage", "building", "water")}})
 with open(src, encoding="utf-8") as f:
     for line in f:
         line = line.strip().lstrip("\x1e")
@@ -126,9 +145,9 @@ with open(src, encoding="utf-8") as f:
         la, lo, area, poly = gm
         wd = t.get("wikidata") if re.fullmatch(r"Q\d+", t.get("wikidata") or "") else None
         c = classer(t, area, wd)
-        if not c: rej["pas assez notable"] += 1; continue
+        if not c: ecarte("pas assez notable", nom, la, lo, t); continue
         # noms génériques sans fiche : un « Monument aux morts » ou une « Ruine » par village n'est pas une découverte
-        if not wd and GENERIQUE.match(nom) and c[0] != "cime": rej["nom générique"] += 1; continue
+        if not wd and GENERIQUE.match(nom) and c[0] != "cime": ecarte("nom générique", nom, la, lo, t); continue
         if not wd and (nom[0].islower() or re.match(r"(aire|plaine|terrain|espace) de jeux|city[ -]?stade", nom, re.I)): rej["nom vague ou aire de jeux"] += 1; continue
         # un plan d'eau trop petit (bassin, fontaine) n'est pas un lac, même avec une fiche
         if c[1] == "lac" and area < 5000: rej["bassin trop petit"] += 1; continue
@@ -158,6 +177,20 @@ for e in items:
     if o is not None: dup += 1; fusion(o, e); continue
     keep.append(e); byname[norm(e["n"])].append(e)
     if e.get("wd"): bywd[e["wd"]] = e
+# étangs et lacs sans fiche Wikidata : un seul (le plus grand) par secteur H3 de résolution 7 (≈ 5 km²),
+# pour que la Dombes ou la Sologne ne deviennent pas 130 découvertes « étang » ; ceux avec une fiche restent tous
+lacs = collections.defaultdict(list)
+for e in keep:
+    if e["c"] == "lac" and not e.get("wd"): lacs[h3.latlng_to_cell(e["lat"], e["lon"], 7)].append(e)
+trop = set()
+for L in lacs.values():
+    L.sort(key=lambda e: -e.get("ha", 0)); trop.update(id(e) for e in L[1:])
+for L in lacs.values():
+    for e in L[1:]: ecarte("étang secondaire du même secteur", e["n"], e["lat"], e["lon"], {"ha": e.get("ha")})
+keep = [e for e in keep if id(e) not in trop]
+MINEUR = {"lavoir", "calvaire", "oratoire", "source", "moulin", "chapelle", "pont"}
+for e in keep:
+    if e["c"] in MINEUR and not e.get("wd"): e["m"] = 1
 print(f"Lieux retenus : {len(keep)} (doublons fusionnés : {dup})")
 print("Écartés :", dict(rej))
 
@@ -188,7 +221,7 @@ def autour(lat, lon, r, n):
     for i in range(n):
         a = 2 * math.pi * i / n; out.append(dem(lat + r * math.cos(a) / 110540, lon + r * math.sin(a) / (111320 * math.cos(math.radians(lat)))))
     return [v for v in out if v is not None]
-HAUT = {"fort", "chateau", "ruines", "tour", "site", "porte"}  # pas les monuments aux morts ni les attractions
+HAUT = {"fort", "chateau", "ruines", "tour", "site", "porte", "chapelle"}  # pas les monuments aux morts ni les attractions
 nh = 0
 if Image is None: print("::warning::Pillow absent : détection des points hauts désactivée")
 else:
@@ -251,6 +284,7 @@ idx = {"region": region, "version": datetime.datetime.now(datetime.timezone.utc)
        "par_type": dict(sorted(stats.items())), "tuiles": sorted(tu),
        "licence": "Lieux © contributeurs OpenStreetMap, ODbL 1.0 ; descriptions Wikidata (CC0) ; photos Wikimedia Commons (licence propre à chaque photo)"}
 with open(f"{outdir}/index.json", "w", encoding="utf-8") as f: json.dump(idx, f, ensure_ascii=False, separators=(",", ":"))
+with open(f"{outdir}/../ecartes.json", "w", encoding="utf-8") as f: json.dump({"comptes": dict(rej), "exemples": EX}, f, ensure_ascii=False, separators=(",", ":"))
 print("Par type :"); [print(f"  {k:24s} {v}") for k, v in sorted(stats.items())]
 if not keep: sys.exit("ERREUR : aucun lieu retenu.")
 for k in tu:
