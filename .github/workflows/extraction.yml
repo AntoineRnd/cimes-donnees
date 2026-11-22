@@ -80,7 +80,7 @@ jobs:
             nwr/man_made=tower nwr/leisure=park,garden,nature_reserve \
             nwr/natural=water,cave_entrance,arch,rock,stone,gorge,waterfall,tree nwr/waterway=waterfall \
             nwr/tourism=attraction nwr/amenity=fountain,lavoir,place_of_worship \
-            nwr/man_made=windmill,watermill nwr/historic=wayside_cross,wayside_shrine,bridge,church,chapel,windmill,watermill \
+            nwr/man_made=windmill,watermill nwr/historic=wayside_cross,wayside_shrine,bridge,church,chapel,windmill,watermill,megalith,standing_stone \
             n/natural=spring nwr/building=lavoir,chapel \
             -o /tmp/lieux.osm.pbf --overwrite
           osmium export /tmp/lieux.osm.pbf -f geojsonseq --add-unique-id=type_id -o /tmp/lieux.geojsonseq --overwrite
