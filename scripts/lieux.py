@@ -8,7 +8,7 @@ Quatre familles :
 
 Filtrage qualitatif (v3) : un nom est obligatoire, sauf pour le petit patrimoine rural (lavoir, chapelle, calvaire de
 pierre, oratoire, moulin, mégalithe), gardé en lieu secondaire et dédoublonné par proximité ; les lieux de culte
-gardent leur vraie étiquette et, s'ils ne sont pas classés, un seul par secteur ; les curiosités suivent une liste explicite ; et les catégories « bavardes » (mémoriaux, jardins,
+gardent leur vraie étiquette et, s'ils ne sont pas classés, pas deux à moins de 1 km ; les curiosités suivent une liste explicite ; et les catégories « bavardes » (mémoriaux, jardins,
 attractions, fontaines, arbres) exigent en plus une fiche Wikidata, un classement patrimonial ou une taille
 suffisante. On ne transforme pas chaque bâtiment ou chaque église en récompense.
 
@@ -110,7 +110,8 @@ def classer(t, area, wd):
         if classe(t): return "patrimoine", typ                       # monument historique : toujours gardé
         # non classé : gardé s'il a un intérêt patrimonial identifiable (fiche Wikidata + article, photo ou date ancienne),
         # puis limité en ville à un seul par secteur (voir plus bas) pour éviter « une église à chaque rue »
-        if wd and (t.get("wikipedia") or t.get("wikimedia_commons") or t.get("image") or ancien(t)): return "patrimoine", typ
+        # (essai 2 : exiger en plus un article ou une photo retirait les églises de village, trop strict)
+        if wd or ancien(t): return "patrimoine", typ
         return None
     if t.get("amenity") == "lavoir" or t.get("building") == "lavoir": return "patrimoine", "lavoir"
     if mm in ("windmill", "watermill") or h in ("windmill", "watermill"): return "patrimoine", "moulin"
@@ -178,6 +179,7 @@ def rural_sans_nom(t):
         return {"dolmen": "Dolmen", "passage_grave": "Allée couverte", "gallery_grave": "Allée couverte", "stone_circle": "Cromlech"}.get(mt, "Menhir")
     return None
 
+BANAL_NOM = re.compile(r"^(maisons?|immeubles?|b[âa]timents?|hangars?|fermes?|logis|terrain\b.*|pelouse\b.*|maison d'habitation|ensemble immobilier)$", re.I)
 GENERIQUE = re.compile(r"^(monuments? aux morts.*|ruines?|vestiges?|parcours de sant[ée]|aire de jeux.*|square|jardin|parc|fontaine|lavoir|calvaire|croix|tour|ch[âa]teau|chapelle|[ée]glise|moulin|source|pont|oratoire|croix de mission|vieux pont)$", re.I)
 rej = collections.Counter(); items = []
 EX = collections.defaultdict(list)   # exemples écartés, pour vérifier ce que les filtres retirent
@@ -209,6 +211,8 @@ with open(src, encoding="utf-8") as f:
         # puis dédoublonné par proximité plus bas
         rural = c[1] in RURAL or (c[1] == "site" and MEGA.match(nom))
         if not wd and GENERIQUE.match(nom) and c[0] != "cime" and not rural: ecarte("nom générique", nom, la, lo, t); continue
+        # « Immeuble », « Maisons », « Terrain 26 » : même avec une fiche (immeubles inscrits de Lille), ce n'est pas une découverte
+        if BANAL_NOM.match(nom): ecarte("nom banal (immeuble, maison, terrain…)", nom, la, lo, t); continue
         if not wd and (nom[0].islower() or re.match(r"(aire|plaine|terrain|espace) de jeux|city[ -]?stade", nom, re.I)): rej["nom vague ou aire de jeux"] += 1; continue
         # un plan d'eau trop petit (bassin, fontaine) n'est pas un lac, même avec une fiche
         if c[1] == "lac" and area < 5000: rej["bassin trop petit"] += 1; continue
@@ -253,7 +257,7 @@ for L in lacs.values():
 keep = [e for e in keep if id(e) not in trop]
 # petit patrimoine au nom générique : pas quinze croix pour une même route. Un seul lieu du même type
 # dans un rayon donné (on garde celui qui a une photo). Pas de quota par commune.
-ECART = {"calvaire": 1500, "oratoire": 1500, "lavoir": 700, "chapelle": 700, "moulin": 700, "site": 500}
+ECART = {"calvaire": 2500, "oratoire": 2500, "lavoir": 700, "chapelle": 700, "moulin": 700, "site": 500}
 gen = sorted([e for e in keep if e.get("_gen")], key=lambda e: -("img" in e))
 vus = collections.defaultdict(list); trop = set()
 for e in gen:
@@ -261,15 +265,16 @@ for e in gen:
     if any(d(e, o) < r for o in vus[k]): trop.add(id(e)); ecarte(f"{k} générique trop proche d'un autre", e["n"], e["lat"], e["lon"], {}); continue
     vus[k].append(e)
 keep = [e for e in keep if id(e) not in trop]
-# lieux de culte non classés : un seul par secteur H3 de résolution 7 (≈ 5 km², un quartier), le mieux documenté, par type (une église et une synagogue voisines restent toutes les deux) ;
-# dans un village il reste donc son église, en ville on évite « une église par rue ». Les monuments historiques restent tous.
-sect = collections.defaultdict(list)
-for e in keep:
-    if e.get("_cnc"): sect[(h3.latlng_to_cell(e["lat"], e["lon"], 7), e["c"])].append(e)
-trop = set()
-for L in sect.values():
-    L.sort(key=lambda e: (e["_cnc"], -("img" in e)))
-    for e in L[1:]: trop.add(id(e)); ecarte("lieu de culte non classé, déjà un autre dans le secteur", e["n"], e["lat"], e["lon"], {})
+# lieux de culte non classés : pas de quota par secteur (deux villages voisins gardent chacun leur église).
+# On retire seulement un lieu du même type à moins de 1 km d'un autre déjà gardé (le mieux documenté passe d'abord) :
+# le village garde son église, la ville n'en affiche pas une par rue. Les monuments historiques restent tous.
+cand = sorted([e for e in keep if e.get("_cnc")], key=lambda e: (e["_cnc"], -("img" in e)))
+grille = collections.defaultdict(list); trop = set()
+for e in cand:
+    cl = h3.latlng_to_cell(e["lat"], e["lon"], 7)
+    if any(o["c"] == e["c"] and d(e, o) < 1000 for n in h3.grid_disk(cl, 1) for o in grille[n]):
+        trop.add(id(e)); ecarte("lieu de culte non classé à moins de 1 km d'un autre", e["n"], e["lat"], e["lon"], {}); continue
+    grille[cl].append(e)
 keep = [e for e in keep if id(e) not in trop]
 MINEUR = {"lavoir", "calvaire", "oratoire", "source", "moulin", "chapelle", "pont"}
 for e in keep:
