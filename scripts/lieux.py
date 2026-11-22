@@ -6,7 +6,9 @@ Quatre familles :
   patrimoine  forts, châteaux, tours, ruines, portes, sites archéologiques, monuments
   curiosite   attractions et curiosités locales reconnues
 
-Filtrage qualitatif : un nom est obligatoire, et les catégories « bavardes » (mémoriaux, jardins,
+Filtrage qualitatif (v3) : un nom est obligatoire, sauf pour le petit patrimoine rural (lavoir, chapelle, calvaire de
+pierre, oratoire, moulin, mégalithe), gardé en lieu secondaire et dédoublonné par proximité ; les lieux de culte
+gardent leur vraie étiquette et, s'ils ne sont pas classés, un seul par secteur ; les curiosités suivent une liste explicite ; et les catégories « bavardes » (mémoriaux, jardins,
 attractions, fontaines, arbres) exigent en plus une fiche Wikidata, un classement patrimonial ou une taille
 suffisante. On ne transforme pas chaque bâtiment ou chaque église en récompense.
 
@@ -87,7 +89,7 @@ def classer(t, area, wd):
     if h == "ruins": return "patrimoine", "ruines"
     if h == "tower" or (mm == "tower" and (h or notable) and t.get("tower:type") not in ("communication", "cooling", "lighting")): return "patrimoine", "tour"
     if h in ("city_gate", "citywalls"): return "patrimoine", "porte"
-    if h == "archaeological_site": return "patrimoine", "site"
+    if h in ("archaeological_site", "megalith", "standing_stone"): return "patrimoine", "site"
     if h == "monument": return "patrimoine", "monument"
     if h == "memorial" and wd and t.get("memorial") not in ("statue", "bust", "plaque", "stolperstein", "stele", "blue_plaque"): return "patrimoine", "monument"
     # nature
@@ -102,9 +104,13 @@ def classer(t, area, wd):
     # patrimoine des villages (v2) : de vraies découvertes, présentes partout en France, mais filtrées.
     # Elles comptent comme les autres lieux (barème inchangé) ; « mineur » sert seulement à les afficher plus discrètement.
     nm = (t.get("name:fr") or t.get("name") or "").lower()
-    if t.get("amenity") == "place_of_worship" or h in ("church", "chapel"):
+    if t.get("amenity") == "place_of_worship" or h in ("church", "chapel") or t.get("building") == "chapel":
         if "chapelle" in nm or t.get("building") == "chapel" or h == "chapel": return "patrimoine", "chapelle"
-        if notable: return "patrimoine", "eglise"          # églises : seulement classées ou avec fiche Wikidata
+        typ = culte(t, nm)
+        if classe(t): return "patrimoine", typ                       # monument historique : toujours gardé
+        # non classé : gardé s'il a un intérêt patrimonial identifiable (fiche Wikidata + article, photo ou date ancienne),
+        # puis limité en ville à un seul par secteur (voir plus bas) pour éviter « une église à chaque rue »
+        if wd and (t.get("wikipedia") or t.get("wikimedia_commons") or t.get("image") or ancien(t)): return "patrimoine", typ
         return None
     if t.get("amenity") == "lavoir" or t.get("building") == "lavoir": return "patrimoine", "lavoir"
     if mm in ("windmill", "watermill") or h in ("windmill", "watermill"): return "patrimoine", "moulin"
@@ -118,10 +124,58 @@ def classer(t, area, wd):
     if t.get("amenity") == "fountain" and (wd or h): return "curiosite", "fontaine"
     # petites curiosités locales sans fiche Wikidata : gardées si OSM les décrit comme lieu à voir (pas un commerce ni un bâtiment quelconque)
     # pas les enclos de zoo ni les manèges
-    if tr == "attraction" and (t.get("attraction") in ("animal", "amusement_ride", "carousel", "roller_coaster", "train", "water_slide", "bumper_car", "swing_carousel", "kiddie_ride", "dark_ride", "log_flume", "drop_tower", "pirate_ship") or t.get("zoo")): return None
-    if tr == "attraction" and (wd or t.get("heritage") or t.get("wikipedia") or t.get("description") or n or h or t.get("information") == "board"):
-        return "curiosite", "curiosite"
-    if tr == "attraction" and not t.get("shop") and not t.get("amenity") and not t.get("building"): return "curiosite", "curiosite"
+    if tr == "attraction":
+        # une fiche Wikidata ou une description ne suffit pas : un bar, une borne ou un immeuble restent sans intérêt.
+        # On garde seulement ce qui relève d'une catégorie « à voir » explicite.
+        if t.get("attraction") in MANEGES or t.get("zoo"): return None
+        if any(t.get(k) for k in BANAL) or t.get("amenity") not in (None, "fountain"): return None
+        if t.get("building") and t.get("building") not in BAT_OK: return None
+        if t.get("leisure") in ("playground", "pitch", "sports_centre", "fitness_station", "track", "water_park"): return None
+        if h or n or mm in MM_OK or classe(t) or MOTS.search(nm): return "curiosite", "curiosite"
+        return None
+    return None
+
+MANEGES = {"animal", "amusement_ride", "carousel", "roller_coaster", "train", "water_slide", "bumper_car", "swing_carousel", "kiddie_ride", "dark_ride", "log_flume", "drop_tower", "pirate_ship", "maze"}
+BANAL = ("shop", "office", "craft", "highway", "railway", "public_transport", "healthcare", "club", "sport", "aeroway", "power", "advertising", "brand")
+BAT_OK = {"church", "chapel", "castle", "tower", "ruins", "windmill", "watermill", "lavoir", "bridge", "monument", "temple", "shrine", "yes"}
+MM_OK = {"lighthouse", "tower", "obelisk", "windmill", "watermill", "bridge", "adit", "kiln", "mineshaft", "water_well"}
+MOTS = re.compile(r"rocher|roche|pierre|grotte|gouffre|chaos|marmite|cascade|fontaine|puits|lavoir|four [àa] pain|cadran|statue|g[ée]ant|arbre|ch[êe]ne|tilleul|\bif\b|dolmen|menhir|cromlech|vestige|ruine|belv[ée]d|panorama|point de vue|table d.orientation|labyrinthe|tunnel|aqueduc|viaduc|[ée]cluse|phare|moulin|rempart|calvaire|oratoire|chapelle|clo[îi]tre|crypte|souterrain|carri[èe]re|mine\b|ermitage|source|cirque|falaise|gorges?|canyon|[ée]tang|marais|tourbi[èe]re|jardin|kiosque|lavoir|halle|beffroi|horloge|cadran", re.I)
+
+def classe(t):
+    """monument historique ou patrimoine protégé"""
+    return bool(t.get("heritage") or t.get("ref:mhs") or t.get("heritage:operator") or t.get("mhs:inscription_date"))
+
+def ancien(t):
+    m = re.match(r"~?(\d{3,4})", str(t.get("start_date") or ""))
+    return bool(m and int(m.group(1)) < 1900)
+
+def culte(t, nm):
+    """bonne étiquette : église, temple, synagogue, mosquée"""
+    rel, den = t.get("religion"), (t.get("denomination") or "").lower()
+    if rel == "jewish" or "synagogue" in nm: return "synagogue"
+    if rel == "muslim" or "mosqu" in nm: return "mosquee"
+    if rel in ("buddhist", "hindu", "sikh", "taoist", "shinto") or "pagode" in nm: return "temple"
+    if den in ("protestant", "reformed", "lutheran", "evangelical", "calvinist", "methodist", "baptist") or nm.startswith("temple"): return "temple"
+    return "eglise"
+
+RURAL = {"lavoir", "chapelle", "calvaire", "oratoire", "moulin"}
+CULTE = {"eglise", "temple", "synagogue", "mosquee"}
+MEGA = re.compile(r"^(menhir|dolmen|cromlech|all[ée]e couverte|m[ée]galithe)s?$", re.I)
+def rural_sans_nom(t):
+    """nom par défaut pour le petit patrimoine sans nom propre ; None = on n'en fait pas une découverte"""
+    h, mm, b = t.get("historic"), t.get("man_made"), t.get("building")
+    if t.get("access") in NON: return None
+    if t.get("amenity") == "lavoir" or b == "lavoir": return "Lavoir"
+    if b == "chapel" or h == "chapel": return "Chapelle"
+    if mm in ("windmill", "watermill") or h in ("windmill", "watermill"):
+        if (t.get("ruins") == "yes" or t.get("disused") == "yes") and not classe(t): return None
+        return "Moulin"
+    if h == "wayside_shrine": return "Oratoire"
+    # croix sans nom : très nombreuses le long des routes ; seulement les calvaires de pierre ou protégés
+    if h == "wayside_cross" and (classe(t) or t.get("material") in ("stone", "granite", "sandstone", "limestone")): return "Calvaire"
+    if h in ("archaeological_site", "megalith", "standing_stone") and (t.get("site_type") == "megalith" or h != "archaeological_site"):
+        mt = (t.get("megalith_type") or "").lower()
+        return {"dolmen": "Dolmen", "passage_grave": "Allée couverte", "gallery_grave": "Allée couverte", "stone_circle": "Cromlech"}.get(mt, "Menhir")
     return None
 
 GENERIQUE = re.compile(r"^(monuments? aux morts.*|ruines?|vestiges?|parcours de sant[ée]|aire de jeux.*|square|jardin|parc|fontaine|lavoir|calvaire|croix|tour|ch[âa]teau|chapelle|[ée]glise|moulin|source|pont|oratoire|croix de mission|vieux pont)$", re.I)
@@ -136,7 +190,11 @@ with open(src, encoding="utf-8") as f:
         if not line: continue
         g = json.loads(line); t = g.get("properties", {})
         nom = (t.get("name:fr") or t.get("name") or "").strip()
-        if not nom: rej["sans nom"] += 1; continue
+        sansnom = not nom
+        if sansnom:
+            nom = rural_sans_nom(t)
+            if not nom: rej["sans nom"] += 1; continue
+            t = dict(t, name=nom)
         if t.get("access") in NON: rej["accès privé"] += 1; continue
         oid = g.get("id")
         if not oid: rej["sans identifiant"] += 1; continue
@@ -147,7 +205,10 @@ with open(src, encoding="utf-8") as f:
         c = classer(t, area, wd)
         if not c: ecarte("pas assez notable", nom, la, lo, t); continue
         # noms génériques sans fiche : un « Monument aux morts » ou une « Ruine » par village n'est pas une découverte
-        if not wd and GENERIQUE.match(nom) and c[0] != "cime": ecarte("nom générique", nom, la, lo, t); continue
+        # … sauf le petit patrimoine rural (lavoir, chapelle, calvaire, oratoire, moulin, menhir) : gardé en lieu secondaire,
+        # puis dédoublonné par proximité plus bas
+        rural = c[1] in RURAL or (c[1] == "site" and MEGA.match(nom))
+        if not wd and GENERIQUE.match(nom) and c[0] != "cime" and not rural: ecarte("nom générique", nom, la, lo, t); continue
         if not wd and (nom[0].islower() or re.match(r"(aire|plaine|terrain|espace) de jeux|city[ -]?stade", nom, re.I)): rej["nom vague ou aire de jeux"] += 1; continue
         # un plan d'eau trop petit (bassin, fontaine) n'est pas un lac, même avec une fiche
         if c[1] == "lac" and area < 5000: rej["bassin trop petit"] += 1; continue
@@ -155,6 +216,8 @@ with open(src, encoding="utf-8") as f:
         ele = num(t.get("ele"))
         if ele is not None and c[0] == "cime": e["ele"] = round(ele)
         if poly: e["poly"] = poly; e["ha"] = round(area / 1e4, 1)
+        if rural and not wd and (sansnom or GENERIQUE.match(nom)): e["_gen"] = 1      # lieu rural au nom générique
+        if c[1] in CULTE and not classe(t): e["_cnc"] = 1 if t.get("wikipedia") else 2  # lieu de culte non classé (1 = avec article)
         if wd: e["wd"] = wd
         com = t.get("wikimedia_commons") or ""
         if com.startswith("File:"): e["img"] = com[5:]
@@ -188,9 +251,30 @@ for L in lacs.values():
 for L in lacs.values():
     for e in L[1:]: ecarte("étang secondaire du même secteur", e["n"], e["lat"], e["lon"], {"ha": e.get("ha")})
 keep = [e for e in keep if id(e) not in trop]
+# petit patrimoine au nom générique : pas quinze croix pour une même route. Un seul lieu du même type
+# dans un rayon donné (on garde celui qui a une photo). Pas de quota par commune.
+ECART = {"calvaire": 1500, "oratoire": 1500, "lavoir": 700, "chapelle": 700, "moulin": 700, "site": 500}
+gen = sorted([e for e in keep if e.get("_gen")], key=lambda e: -("img" in e))
+vus = collections.defaultdict(list); trop = set()
+for e in gen:
+    k = e["c"]; r = ECART.get(k, 700)
+    if any(d(e, o) < r for o in vus[k]): trop.add(id(e)); ecarte(f"{k} générique trop proche d'un autre", e["n"], e["lat"], e["lon"], {}); continue
+    vus[k].append(e)
+keep = [e for e in keep if id(e) not in trop]
+# lieux de culte non classés : un seul par secteur H3 de résolution 7 (≈ 5 km², un quartier), le mieux documenté, par type (une église et une synagogue voisines restent toutes les deux) ;
+# dans un village il reste donc son église, en ville on évite « une église par rue ». Les monuments historiques restent tous.
+sect = collections.defaultdict(list)
+for e in keep:
+    if e.get("_cnc"): sect[(h3.latlng_to_cell(e["lat"], e["lon"], 7), e["c"])].append(e)
+trop = set()
+for L in sect.values():
+    L.sort(key=lambda e: (e["_cnc"], -("img" in e)))
+    for e in L[1:]: trop.add(id(e)); ecarte("lieu de culte non classé, déjà un autre dans le secteur", e["n"], e["lat"], e["lon"], {})
+keep = [e for e in keep if id(e) not in trop]
 MINEUR = {"lavoir", "calvaire", "oratoire", "source", "moulin", "chapelle", "pont"}
 for e in keep:
-    if e["c"] in MINEUR and not e.get("wd"): e["m"] = 1
+    if (e["c"] in MINEUR or e.get("_gen")) and not e.get("wd"): e["m"] = 1
+    e.pop("_gen", None); e.pop("_cnc", None)
 print(f"Lieux retenus : {len(keep)} (doublons fusionnés : {dup})")
 print("Écartés :", dict(rej))
 
