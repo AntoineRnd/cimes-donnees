@@ -7,6 +7,18 @@ on:
         description: "Extrait Geofabrik (ex. europe/france/rhone-alpes)"
         default: "europe/france/rhone-alpes"
         required: true
+      dossier:
+        description: "data (utilisé par l'appli) ou essai (pour comparer sans toucher à l'appli)"
+        default: "data"
+        required: true
+  workflow_call:
+    inputs:
+      region:
+        type: string
+        required: true
+      dossier:
+        type: string
+        default: "data"
 
 permissions:
   contents: write
@@ -14,9 +26,11 @@ permissions:
 jobs:
   extraire:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Outils (osmium)
         run: |
@@ -28,7 +42,7 @@ jobs:
       - name: Téléchargement de l'extrait OpenStreetMap (jamais enregistré dans le dépôt)
         run: |
           set -euo pipefail
-          R="${{ github.event.inputs.region }}"
+          R="${{ inputs.region }}"
           B="https://download.geofabrik.de"
           # nouvelle adresse Geofabrik (dossier par région), sinon l'ancienne
           for URL in "$B/$R/$(basename "$R")-latest.osm.pbf" "$B/$R-latest.osm.pbf"; do
@@ -52,45 +66,50 @@ jobs:
       - name: Fichier léger pour Cimes + contrôles
         run: |
           set -euo pipefail
-          SLUG=$(basename "${{ github.event.inputs.region }}")
-          python3 scripts/extract.py /tmp/cimes.geojsonseq "data/$SLUG/cimes.json" "$SLUG"
-          ls -lh "data/$SLUG/"
+          SLUG=$(basename "${{ inputs.region }}")
+          python3 scripts/extract.py /tmp/cimes.geojsonseq "${{ inputs.dossier }}/$SLUG/cimes.json" "$SLUG"
+          ls -lh "${{ inputs.dossier }}/$SLUG/"
 
       - name: Lieux à découvrir (cimes, nature, patrimoine, curiosités) + photos Wikidata
         run: |
           set -euo pipefail
-          SLUG=$(basename "${{ github.event.inputs.region }}")
+          SLUG=$(basename "${{ inputs.region }}")
           osmium tags-filter /tmp/region.osm.pbf \
             n/natural=peak,saddle,hill n/mountain_pass=yes n/tourism=viewpoint \
             nwr/historic=castle,fort,ruins,tower,city_gate,citywalls,archaeological_site,monument,manor,memorial \
             nwr/man_made=tower nwr/leisure=park,garden,nature_reserve \
             nwr/natural=water,cave_entrance,arch,rock,stone,gorge,waterfall,tree nwr/waterway=waterfall \
-            nwr/tourism=attraction nwr/amenity=fountain \
+            nwr/tourism=attraction nwr/amenity=fountain,lavoir,place_of_worship \
+            nwr/man_made=windmill,watermill nwr/historic=wayside_cross,wayside_shrine,bridge,church,chapel,windmill,watermill \
+            n/natural=spring nwr/building=lavoir,chapel \
             -o /tmp/lieux.osm.pbf --overwrite
           osmium export /tmp/lieux.osm.pbf -f geojsonseq --add-unique-id=type_id -o /tmp/lieux.geojsonseq --overwrite
           ls -lh /tmp/lieux.geojsonseq
-          python3 scripts/lieux.py /tmp/lieux.geojsonseq "data/$SLUG/lieux" "$SLUG"
+          python3 scripts/lieux.py /tmp/lieux.geojsonseq "${{ inputs.dossier }}/$SLUG/lieux" "$SLUG"
           rm -f /tmp/lieux.geojsonseq /tmp/lieux.osm.pbf
-          du -sh "data/$SLUG/lieux"
+          du -sh "${{ inputs.dossier }}/$SLUG/lieux"
 
       - name: Zones accessibles à pied (cellules H3, par tuiles)
+        if: inputs.dossier == 'data'
         run: |
           set -euo pipefail
-          SLUG=$(basename "${{ github.event.inputs.region }}")
+          SLUG=$(basename "${{ inputs.region }}")
           osmium tags-filter /tmp/region.osm.pbf \
             w/highway=footway,path,track,pedestrian,living_street,residential,service,unclassified,tertiary,tertiary_link,secondary,secondary_link,primary,primary_link,steps,cycleway,bridleway,road \
             -o /tmp/voies.osm.pbf --overwrite
           osmium export /tmp/voies.osm.pbf -f geojsonseq --geometry-types=linestring,polygon -o /tmp/voies.geojsonseq --overwrite
           ls -lh /tmp/voies.geojsonseq
-          python3 scripts/acces.py /tmp/voies.geojsonseq "data/$SLUG/acces" "$SLUG"
+          python3 scripts/acces.py /tmp/voies.geojsonseq "${{ inputs.dossier }}/$SLUG/acces" "$SLUG"
           rm -f /tmp/voies.geojsonseq /tmp/voies.osm.pbf
-          du -sh "data/$SLUG/acces"
+          du -sh "${{ inputs.dossier }}/$SLUG/acces"
 
       - name: Enregistrement du résultat dans le dépôt
         run: |
           set -euo pipefail
           git config user.name "cimes-bot"
           git config user.email "cimes-bot@users.noreply.github.com"
-          git add data/
-          git commit -m "Extraction des cimes : ${{ github.event.inputs.region }}" || echo "Rien de nouveau"
-          git push
+          git add "${{ inputs.dossier }}/"
+          git commit -m "Extraction des cimes : ${{ inputs.region }}" || { echo "Rien de nouveau"; exit 0; }
+          # plusieurs régions à la suite : on se recale sur la dernière version avant d'envoyer
+          for i in 1 2 3 4 5; do git pull --rebase -q && git push && exit 0; sleep $((RANDOM % 20 + 10)); done
+          exit 1
