@@ -1,0 +1,39 @@
+name: Extraction de toute la France (une région après l'autre)
+
+on:
+  workflow_dispatch:
+    inputs:
+      regions:
+        description: "Régions (séparées par des espaces) ou « toutes »"
+        default: "toutes"
+        required: true
+      dossier:
+        description: "data (utilisé par l'appli) ou essai (pour comparer sans toucher à l'appli)"
+        default: "data"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  liste:
+    runs-on: ubuntu-latest
+    outputs:
+      regions: ${{ steps.r.outputs.regions }}
+    steps:
+      - id: r
+        run: |
+          T="alsace aquitaine auvergne basse-normandie bourgogne bretagne centre champagne-ardenne corse franche-comte haute-normandie ile-de-france languedoc-roussillon limousin lorraine midi-pyrenees nord-pas-de-calais pays-de-la-loire picardie poitou-charentes provence-alpes-cote-d-azur rhone-alpes"
+          L="${{ inputs.regions }}"; [ "$L" = "toutes" ] && L="$T"
+          echo "regions=$(printf '%s\n' $L | sed 's#^#europe/france/#' | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+  region:
+    needs: liste
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        region: ${{ fromJson(needs.liste.outputs.regions) }}
+    uses: ./.github/workflows/extraction.yml
+    with:
+      region: ${{ matrix.region }}
+      dossier: ${{ inputs.dossier }}
