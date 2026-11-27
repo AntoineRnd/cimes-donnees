@@ -39,6 +39,9 @@ jobs:
           pip install --quiet "h3>=4,<5" pillow
           osmium --version
 
+      - name: Vérification des critères de sélection
+        run: python3 scripts/test_selection.py
+
       - name: Téléchargement de l'extrait OpenStreetMap (jamais enregistré dans le dépôt)
         run: |
           set -euo pipefail
@@ -79,7 +82,7 @@ jobs:
             nwr/historic=castle,fort,ruins,tower,city_gate,citywalls,archaeological_site,monument,manor,memorial \
             nwr/man_made=tower nwr/leisure=park,garden,nature_reserve \
             nwr/natural=water,cave_entrance,arch,rock,stone,gorge,waterfall,tree nwr/waterway=waterfall \
-            nwr/tourism=attraction nwr/amenity=fountain,lavoir,place_of_worship \
+            nwr/tourism=attraction,museum,artwork,viewpoint nwr/place=square nwr/heritage nwr/ref:mhs nwr/amenity=fountain,lavoir,place_of_worship,theatre,townhall,library \
             nwr/man_made=windmill,watermill nwr/historic=wayside_cross,wayside_shrine,bridge,church,chapel,windmill,watermill,megalith,standing_stone \
             n/natural=spring nwr/building=lavoir,chapel \
             -o /tmp/lieux.osm.pbf --overwrite

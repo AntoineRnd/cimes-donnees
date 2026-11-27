@@ -28,6 +28,16 @@ def num(v):
     try: return float(str(v).replace(",", ".").replace("m", "").strip())
     except (ValueError, TypeError): return None
 
+def nom_cime(t):
+    """Nom OSM réel ou libellé d'altitude explicite, jamais de nom géographique inventé."""
+    cat = ("Sommet" if t.get("natural") == "peak" else
+           "Col" if t.get("natural") == "saddle" or t.get("mountain_pass") == "yes" else None)
+    if not cat: return None
+    try: ele = float(str(t.get("ele", "")).replace(",", ".").replace("m", "").strip())
+    except (ValueError, TypeError): return None
+    if not math.isfinite(ele) or ele < 0 or ele > 9000: return None
+    return f"{cat} sans nom · {round(ele)} m"
+
 def ring_area_m2(ring):
     if len(ring) < 4: return 0.0
     la0 = sum(p[1] for p in ring) / len(ring); k = 111320 * math.cos(math.radians(la0))
@@ -91,10 +101,18 @@ def classer(t, area, wd):
     if h in ("city_gate", "citywalls"): return "patrimoine", "porte"
     if h in ("archaeological_site", "megalith", "standing_stone"): return "patrimoine", "site"
     if h == "monument": return "patrimoine", "monument"
-    if h == "memorial" and wd and t.get("memorial") not in ("statue", "bust", "plaque", "stolperstein", "stele", "blue_plaque"): return "patrimoine", "monument"
+    if h == "memorial" and t.get("memorial") not in ("plaque", "stolperstein", "blue_plaque"):
+        if wd or classe(t) or (t.get("wikipedia") and t.get("memorial") != "bust"): return "patrimoine", "monument"
+    # Lieux culturels et espaces urbains identifiables, sans ajouter tous les bâtiments.
+    if tr == "museum" and not any(t.get(k) for k in BANAL): return "patrimoine", "monument"
+    if t.get("place") == "square" and (notable or classe(t) or area >= 1800): return "patrimoine", "monument"
+    if tr == "artwork" and t.get("artwork_type") in ("sculpture", "statue", "mural", "installation", "relief", "street_art"):
+        if wd or classe(t) or t.get("wikipedia"): return "curiosite", "curiosite"
+    if classe(t) and (t.get("building") in ("civic", "public", "theatre", "museum", "train_station", "townhall", "university", "historic", "palace") or t.get("amenity") in ("theatre", "townhall", "library")) and not any(t.get(k) for k in BANAL):
+        return "patrimoine", "monument"
     # nature
-    # parcs : pas les petits squares de quartier (1 ha au moins, ou 0,3 ha avec une fiche Wikidata)
-    if le in ("park", "garden") and (area >= 10000 or (wd and area >= 3000)): return "nature", "parc"
+    # Parc/jardin nommé : 0,5 ha, ou 0,25 ha pour un lieu documenté ; jamais une aire de jeux.
+    if le in ("park", "garden") and (area >= 5000 or ((wd or classe(t) or t.get("wikipedia")) and area >= 2500)): return "nature", "parc"
     if le == "nature_reserve" and (wd or area >= 50000): return "nature", "reserve"
     if n == "water" and t.get("water") not in ("river", "canal", "stream", "wastewater", "basin", "reflecting_pool") and (wd or area >= 20000): return "nature", "lac"
     if w == "waterfall" or n == "waterfall": return "nature", "cascade"
@@ -122,7 +140,7 @@ def classer(t, area, wd):
     if h == "bridge" or (t.get("bridge") and (t.get("heritage") or (wd and h))): return "patrimoine", "pont"
     if n == "spring": return "nature", "source"
     # curiosités
-    if t.get("amenity") == "fountain" and (wd or h): return "curiosite", "fontaine"
+    if t.get("amenity") == "fountain" and (wd or h or classe(t) or t.get("wikipedia")): return "curiosite", "fontaine"
     # petites curiosités locales sans fiche Wikidata : gardées si OSM les décrit comme lieu à voir (pas un commerce ni un bâtiment quelconque)
     # pas les enclos de zoo ni les manèges
     if tr == "attraction":
@@ -194,7 +212,7 @@ with open(src, encoding="utf-8") as f:
         nom = (t.get("name:fr") or t.get("name") or "").strip()
         sansnom = not nom
         if sansnom:
-            nom = rural_sans_nom(t)
+            nom = nom_cime(t) or rural_sans_nom(t)
             if not nom: rej["sans nom"] += 1; continue
             t = dict(t, name=nom)
         if t.get("access") in NON: rej["accès privé"] += 1; continue
@@ -212,14 +230,15 @@ with open(src, encoding="utf-8") as f:
         rural = c[1] in RURAL or (c[1] == "site" and MEGA.match(nom))
         if not wd and GENERIQUE.match(nom) and c[0] != "cime" and not rural: ecarte("nom générique", nom, la, lo, t); continue
         # « Immeuble », « Maisons », « Terrain 26 » : même avec une fiche (immeubles inscrits de Lille), ce n'est pas une découverte
-        if BANAL_NOM.match(nom): ecarte("nom banal (immeuble, maison, terrain…)", nom, la, lo, t); continue
-        if not wd and (nom[0].islower() or re.match(r"(aire|plaine|terrain|espace) de jeux|city[ -]?stade", nom, re.I)): rej["nom vague ou aire de jeux"] += 1; continue
+        if c[0] != "cime" and BANAL_NOM.match(nom): ecarte("nom banal (immeuble, maison, terrain…)", nom, la, lo, t); continue
+        if c[0] != "cime" and not wd and (nom[0].islower() or re.match(r"(aire|plaine|terrain|espace) de jeux|city[ -]?stade", nom, re.I)): rej["nom vague ou aire de jeux"] += 1; continue
         # un plan d'eau trop petit (bassin, fontaine) n'est pas un lac, même avec une fiche
         if c[1] == "lac" and area < 5000: rej["bassin trop petit"] += 1; continue
         e = {"id": str(oid), "n": nom, "f": c[0], "c": c[1], "lat": round(la, 6), "lon": round(lo, 6)}
         ele = num(t.get("ele"))
         if ele is not None and c[0] == "cime": e["ele"] = round(ele)
         if poly: e["poly"] = poly; e["ha"] = round(area / 1e4, 1)
+        if sansnom and c[0] == "cime": e["unnamed"] = True
         if rural and not wd and (sansnom or GENERIQUE.match(nom)): e["_gen"] = 1      # lieu rural au nom générique
         if c[1] in CULTE and not classe(t): e["_cnc"] = 1 if t.get("wikipedia") else 2  # lieu de culte non classé (1 = avec article)
         if wd: e["wd"] = wd
@@ -240,7 +259,8 @@ def fusion(o, e):
     if o.get("wd"): bywd[o["wd"]] = o
 for e in items:
     o = bywd.get(e.get("wd")) if e.get("wd") else None
-    if o is None: o = next((x for x in byname[norm(e["n"])] if d(e, x) < 400), None)
+    if o is not None and e["c"] in ("sommet", "col") and (o["c"] != e["c"] or d(e, o) >= 80): o = None
+    if o is None: o = next((x for x in byname[norm(e["n"])] if not e.get("unnamed") and not x.get("unnamed") and (e["f"] != "cime" and x["f"] != "cime" and d(e, x) < 400 or e["c"] == x["c"] and d(e, x) < 80)), None)
     if o is not None: dup += 1; fusion(o, e); continue
     keep.append(e); byname[norm(e["n"])].append(e)
     if e.get("wd"): bywd[e["wd"]] = e

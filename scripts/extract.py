@@ -4,7 +4,7 @@ Ne garde que les éléments NOMMÉS : sommets, cols, collines, belvédères.
 Chaque élément : identifiant OSM, nom, catégorie, latitude, longitude, altitude si connue.
 Données © les contributeurs d'OpenStreetMap, sous licence ODbL.
 """
-import json, sys, datetime, collections
+import json, sys, datetime, collections, math
 
 src, dst, region = sys.argv[1], sys.argv[2], sys.argv[3]
 PRIO = {"sommet": 0, "col": 1, "colline": 2, "belvedere": 3}
@@ -16,9 +16,19 @@ def categorie(t):
     if t.get("tourism") == "viewpoint": return "belvedere"
     return None
 
+def nom_cime(t):
+    """Nom OSM réel ou libellé d'altitude explicite, jamais de nom géographique inventé."""
+    cat = ("Sommet" if t.get("natural") == "peak" else
+           "Col" if t.get("natural") == "saddle" or t.get("mountain_pass") == "yes" else None)
+    if not cat: return None
+    try: ele = float(str(t.get("ele", "")).replace(",", ".").replace("m", "").strip())
+    except (ValueError, TypeError): return None
+    if not math.isfinite(ele) or ele < 0 or ele > 9000: return None
+    return f"{cat} sans nom · {round(ele)} m"
+
 def altitude(t):
     try: return round(float(str(t.get("ele", "")).replace(",", ".").replace("m", "").strip()))
-    except ValueError: return None
+    except (ValueError, TypeError, OverflowError): return None
 
 items, rejets = {}, collections.Counter()
 with open(src, encoding="utf-8") as f:
@@ -28,7 +38,7 @@ with open(src, encoding="utf-8") as f:
         g = json.loads(line)
         if g.get("geometry", {}).get("type") != "Point": rejets["pas un point"] += 1; continue
         t = g.get("properties", {})
-        nom = (t.get("name") or "").strip()
+        nom = (t.get("name:fr") or t.get("name") or "").strip() or nom_cime(t)
         if not nom: rejets["sans nom"] += 1; continue
         cat = categorie(t)
         if not cat: rejets["catégorie inconnue"] += 1; continue
